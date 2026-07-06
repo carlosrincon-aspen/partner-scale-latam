@@ -22,7 +22,9 @@ y alimenta todo lo demás (Overview, territorios, países, partners).
   Aquí también se **registra el resultado real por deal** (Won / Lost / Declined + monto
   real cerrado) con ✎.
 - **Forecast** — captura manual de **negocios** (deals) + botón **Lock month**: congela el
-  forecast comprometido del mes actual y lo envía a Accuracy.
+  forecast comprometido del mes actual y lo envía a Accuracy. **Filtros:** pills por stage
+  (con conteo), buscador (deal/partner/vendedor), partner, producto, rango de fecha de cierre
+  y rango de **ARR $**. Cada deal tiene **vendedor de Salesforce (AE)**. Los montos son **ARR $**.
 - **Accuracy** — **forecast bloqueado** (derivado de los deals comprometidos) vs. **real**
   (Won, con monto real por deal) por mes: gráfico Forecast/Actual, lock por mes y % de
   acierto (YTD y mensual). Nada se escribe a mano aquí: todo migra de Forecast y de los deals.

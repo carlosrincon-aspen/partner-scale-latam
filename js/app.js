@@ -56,8 +56,8 @@ const WIN = {
 const inWin = (deal, w) => { const t = dateOf(deal.close); return t >= w.from && t <= w.to; };
 
 /* ---- Store (localStorage) ------------------------------------------------- */
-const STORE_KEY = 'psl:data:v4';   // v4: deal.actual + locked monthly forecast (locks)
-const BK_KEY    = 'psl:backups:v4';
+const STORE_KEY = 'psl:data:v5';   // v5: deal.seller (Salesforce AE) + Forecast filters
+const BK_KEY    = 'psl:backups:v5';
 let STORE = { partners: [], deals: [], config: {}, locks: {} };
 const CUR_KEY = Y0 + '-' + String(TODAY.getMonth() + 1).padStart(2, '0');   // current month key
 let partnerById = {}, dealsByPartner = {}, countryByCode = {}, territoryByCode = {};
@@ -428,7 +428,7 @@ function dealsTable(deals, opts) {
   if (!deals.length) return '<div class="card"><div class="empty">No deals. Add them in <b>Forecast</b>.</div></div>';
   const cols = [ showPartner ? { key: 'partner', label: 'Partner' } : null,
     { key: 'name', label: 'Deal' }, { key: 'product', label: 'Product' },
-    { key: 'close', label: 'Close date' }, { key: 'amount', label: 'Forecast USD', num: true },
+    { key: 'close', label: 'Close date' }, { key: 'amount', label: 'ARR $', num: true },
     { key: 'stage', label: 'Stage' }, { key: 'actual', label: 'Actual (real)', num: true } ].filter(Boolean);
   const rows = deals.slice().sort((a, b) => {
     let av, bv;
@@ -447,7 +447,7 @@ function dealsTable(deals, opts) {
     <thead><tr>${cols.map(c => `<th class="${c.num ? 'num' : ''}" data-k="${c.key}">${c.label} ${dealSort.key === c.key ? `<span class="arrow">${dealSort.dir > 0 ? '▲' : '▼'}</span>` : ''}</th>`).join('')}${editable ? '<th class="num">Edit</th>' : ''}</tr></thead>
     <tbody>${rows.map(d => `<tr>
         ${showPartner ? `<td><div class="cell-partner"><span class="avatar sm">${initials((partnerById[d.partnerId]||{}).name||'?')}</span> <a class="lnk" onclick="go('#/partner/${d.partnerId}')">${esc((partnerById[d.partnerId]||{}).name||'—')}</a></div></td>` : ''}
-        <td class="deal-name">${esc(d.name)}${overdue(d) ? ' <span class="badge st-Lost" title="Past close date">overdue</span>' : ''}</td>
+        <td class="deal-name">${esc(d.name)}${overdue(d) ? ' <span class="badge st-Lost" title="Past close date">overdue</span>' : ''}${d.seller ? `<div class="muted-sm">AE: ${esc(d.seller)}</div>` : ''}</td>
         <td>${esc(d.product)}</td><td>${fmtDate(d.close)}</td>
         <td class="num"><b>${fmtUSD(d.amount)}</b></td>
         <td>${stageBadge(d.stage)}</td>
@@ -466,33 +466,81 @@ function wireDealsTable() {
 /* =============================================================================
    FORECAST (deals only)
 ============================================================================= */
+let dealFilter = { q: '', stage: 'all', partner: 'all', product: 'all', from: '', to: '', min: '', max: '' };
 function renderForecast() {
   renderTabs('forecast');
-  const deals = STORE.deals.slice().sort((a, b) => dateOf(a.close) - dateOf(b.close));
   const m = agg(STORE.deals);
+  const f = dealFilter;
+  const pOpts = STORE.partners.slice().sort((a, b) => a.name.localeCompare(b.name))
+    .map(p => `<option value="${p.id}"${f.partner === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('');
+  const prodOpts = STORE.config.products
+    .map(p => `<option value="${esc(p)}"${f.product === p ? ' selected' : ''}>${esc(p)}</option>`).join('');
   app().innerHTML = `
     <h1 class="page-title">Forecast <span class="tag-demo">MANUAL ENTRY</span></h1>
-    <p class="page-sub">Capture your <b>deals</b> here — this feeds every other tab. Partners are managed in the <b>Partners</b> tab; backups in <b>Admin</b>.</p>
+    <p class="page-sub">Capture your <b>deals</b> here — this feeds every other tab. Partners are managed in the <b>Partners</b> tab; backups in <b>Admin</b>. Amounts are <b>ARR $</b>.</p>
     <div class="kpi-row">
-      ${kpi({ label: 'Total deals', value: STORE.deals.length, foot: fmtUSD(m.total) + ' total value' })}
+      ${kpi({ label: 'Total deals', value: STORE.deals.length, foot: fmtUSD(m.total) + ' total ARR' })}
       ${kpi({ label: 'Total committed', value: fmtUSDshort(m.committedAmt), foot: m.committedCount + ' deals', primary: true })}
       ${kpi({ label: 'Won (year)', value: fmtUSDshort(m.wonAmt), foot: '' })}
     </div>
     ${lockPanel()}
+
     <div class="toolbar"><button class="btn primary" onclick="openDealForm()">＋ New deal</button></div>
+    <div class="filters">
+      <input id="fltQ" class="flt-search" type="search" placeholder="Search deal, partner or seller…" value="${esc(f.q)}" oninput="onFilter('q',this.value)">
+      <select id="fltPartner" onchange="onFilter('partner',this.value)"><option value="all">All partners</option>${pOpts}</select>
+      <select id="fltProduct" onchange="onFilter('product',this.value)"><option value="all">All products</option>${prodOpts}</select>
+      <span class="flt-inline">Close <input type="date" value="${f.from}" onchange="onFilter('from',this.value)"> – <input type="date" value="${f.to}" onchange="onFilter('to',this.value)"></span>
+      <span class="flt-inline">ARR $ <input type="number" class="flt-num" placeholder="min" value="${f.min}" oninput="onFilter('min',this.value)"> – <input type="number" class="flt-num" placeholder="max" value="${f.max}" oninput="onFilter('max',this.value)"></span>
+      <button class="btn ghost sm" onclick="clearFilters()">Clear</button>
+    </div>
+    <div id="dealPills" class="pill-row"></div>
+    <div id="dealTableWrap"></div>`;
+  applyDealFilters();
+}
+function passNonStage(d) {
+  const f = dealFilter;
+  if (f.partner !== 'all' && d.partnerId !== f.partner) return false;
+  if (f.product !== 'all' && d.product !== f.product) return false;
+  if (f.from && d.close < f.from) return false;
+  if (f.to && d.close > f.to) return false;
+  if (f.min !== '' && d.amount < Number(f.min)) return false;
+  if (f.max !== '' && d.amount > Number(f.max)) return false;
+  if (f.q) { const q = f.q.toLowerCase();
+    const hay = (d.name + ' ' + ((partnerById[d.partnerId]||{}).name||'') + ' ' + (d.seller||'') + ' ' + d.product).toLowerCase();
+    if (hay.indexOf(q) < 0) return false; }
+  return true;
+}
+function applyDealFilters() {
+  const base = STORE.deals.filter(passNonStage);
+  const pills = document.getElementById('dealPills');
+  if (pills) {
+    const pill = (key, label, count) => `<button class="pill${dealFilter.stage === key ? ' active' : ''}" onclick="setStage('${key}')">${label} <span class="pc">${count}</span></button>`;
+    pills.innerHTML = pill('all', 'All', base.length) +
+      STAGES.map(s => pill(s.key, s.label, base.filter(d => d.stage === s.key).length)).join('');
+  }
+  const rows = (dealFilter.stage === 'all' ? base : base.filter(d => d.stage === dealFilter.stage))
+    .sort((a, b) => dateOf(a.close) - dateOf(b.close));
+  const arr = rows.reduce((s, d) => s + d.amount, 0);
+  const wrap = document.getElementById('dealTableWrap');
+  if (!wrap) return;
+  wrap.innerHTML = `<div class="result-line">${rows.length} of ${STORE.deals.length} deals · ${fmtUSD(arr)} ARR</div>
     <div class="card"><div class="table-wrap"><table>
-      <thead><tr><th>Partner</th><th>Deal</th><th>Product</th><th>Close date</th>
-        <th class="num">Amount USD</th><th>Stage</th><th class="num">Actions</th></tr></thead>
-      <tbody>${deals.length ? deals.map(d => { const p = partnerById[d.partnerId] || { name: '—' };
+      <thead><tr><th>Partner</th><th>Deal</th><th>Seller</th><th>Product</th><th>Close date</th>
+        <th class="num">ARR $</th><th>Stage</th><th class="num">Actions</th></tr></thead>
+      <tbody>${rows.length ? rows.map(d => { const p = partnerById[d.partnerId] || { name: '—' };
         return `<tr>
-          <td><div class="cell-partner"><span class="avatar sm">${initials(p.name)}</span> ${esc(p.name)} <span class="muted-sm">${(p.country||{}).flag||''}</span></div></td>
-          <td class="deal-name">${esc(d.name)}</td><td>${esc(d.product)}</td><td>${fmtDate(d.close)}</td>
+          <td><div class="cell-partner"><span class="avatar sm">${initials(p.name)}</span> <a class="lnk" onclick="go('#/partner/${d.partnerId}')">${esc(p.name)}</a></div></td>
+          <td class="deal-name">${esc(d.name)}</td><td>${esc(d.seller||'—')}</td><td>${esc(d.product)}</td><td>${fmtDate(d.close)}</td>
           <td class="num"><b>${fmtUSD(d.amount)}</b></td><td>${stageBadge(d.stage)}</td>
           <td class="num nowrap"><button class="icon-btn" title="Edit" onclick="openDealForm('${d.id}')">✎</button>
             <button class="icon-btn danger" title="Delete" onclick="deleteDeal('${d.id}')">🗑</button></td></tr>`;
-      }).join('') : '<tr><td class="empty" colspan="7">No deals yet. Create the first one with “＋ New deal”.</td></tr>'}
+      }).join('') : '<tr><td class="empty" colspan="8">No deals match these filters.</td></tr>'}
       </tbody></table></div></div>`;
 }
+function onFilter(field, value) { dealFilter[field] = value; applyDealFilters(); }
+function setStage(s) { dealFilter.stage = s; applyDealFilters(); }
+function clearFilters() { dealFilter = { q: '', stage: 'all', partner: 'all', product: 'all', from: '', to: '', min: '', max: '' }; renderForecast(); }
 
 /* =============================================================================
    ACCURACY (locked forecast vs actual, by month)
@@ -680,8 +728,9 @@ function openDealForm(id, prefillPartner) {
   const body = `
     ${field('Partner', selectHTML('f_partner', pOpts, d ? d.partnerId : (prefillPartner || STORE.partners[0].id)))}
     ${field('Deal name', `<input id="f_name" type="text" value="${d ? esc(d.name) : ''}" placeholder="e.g. Sales Cloud rollout">`)}
-    ${field('Product', selectHTML('f_product', STORE.config.products, d ? d.product : STORE.config.products[0]))}
-    <div class="fld-row">${field('Forecast amount USD', `<input id="f_amount" type="number" min="0" step="1000" value="${d ? d.amount : ''}" placeholder="0">`)}
+    <div class="fld-row">${field('Product', selectHTML('f_product', STORE.config.products, d ? d.product : STORE.config.products[0]))}
+      ${field('Salesforce seller (AE)', `<input id="f_seller" type="text" value="${d ? esc(d.seller||'') : ''}" placeholder="Account Executive">`)}</div>
+    <div class="fld-row">${field('ARR $ (annual)', `<input id="f_amount" type="number" min="0" step="1000" value="${d ? d.amount : ''}" placeholder="0">`)}
       ${field('Close date', `<input id="f_close" type="date" value="${d ? d.close : ''}">`)}</div>
     <div class="fld-row">${field('Stage', selectHTML('f_stage', STAGES.map(s => ({ v: s.key, l: s.label + ' (' + Math.round(s.weight*100) + '%)' })), d ? d.stage : 'Discovery'))}
       ${field('Created date', `<input id="f_created" type="date" value="${d ? d.created : TODAY.toISOString().slice(0,10)}">`)}</div>
@@ -694,7 +743,7 @@ function openDealForm(id, prefillPartner) {
     if (!close) return alert('Choose the close date.');
     const actualStr = val('f_actual');
     const rec = { partnerId: val('f_partner'), name, product: val('f_product'), amount, close,
-                  created: val('f_created') || close, stage: val('f_stage'),
+                  created: val('f_created') || close, stage: val('f_stage'), seller: val('f_seller'),
                   actual: actualStr === '' ? '' : parseFloat(actualStr) };
     if (d) Object.assign(d, rec); else STORE.deals.push(Object.assign({ id: 'd' + Date.now() }, rec));
     saveStore('deal'); closeOverlay(); route();
