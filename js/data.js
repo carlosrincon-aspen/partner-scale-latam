@@ -98,13 +98,21 @@ const SEED_DEALS = [
   /* historical closed deals (Won) — feed the Accuracy module for H1 2026 */
   { id: 'd18', partnerId: 'p3',  name: 'Deal 3 · Partner 3',  product: 'Sales Cloud',     amount:  80000, created: '2025-12-01', close: '2026-02-20', stage: 'Won'        },
   { id: 'd19', partnerId: 'p10', name: 'Deal 2 · Partner 10', product: 'Data Cloud',      amount: 120000, created: '2026-01-10', close: '2026-03-15', stage: 'Won'        },
-  { id: 'd20', partnerId: 'p1',  name: 'Deal 3 · Partner 1',  product: 'Platform',        amount:  90000, created: '2026-02-01', close: '2026-04-22', stage: 'Won'        },
+  { id: 'd20', partnerId: 'p1',  name: 'Deal 3 · Partner 1',  product: 'Platform',        amount:  90000, created: '2026-02-01', close: '2026-04-22', stage: 'Won', actual: 85000 },
   { id: 'd21', partnerId: 'p9',  name: 'Deal 3 · Partner 9',  product: 'Service Cloud',   amount:  70000, created: '2026-03-01', close: '2026-05-18', stage: 'Won'        },
+  /* decided losses (feed partner accuracy) + a live current-month deal */
+  { id: 'd22', partnerId: 'p3',  name: 'Deal 4 · Partner 3',  product: 'Platform',        amount:  20000, created: '2026-01-05', close: '2026-03-10', stage: 'Lost'       },
+  { id: 'd23', partnerId: 'p9',  name: 'Deal 4 · Partner 9',  product: 'Marketing Cloud', amount:  30000, created: '2026-02-10', close: '2026-06-05', stage: 'Lost'       },
+  { id: 'd24', partnerId: 'p1',  name: 'Deal 4 · Partner 1',  product: 'Sales Cloud',     amount:  70000, created: '2026-06-20', close: '2026-07-28', stage: 'Proposal'   },
 ];
 
-/* ---- SEED monthly forecast targets (Accuracy module) ---------------------
-   key 'YYYY-MM' -> committed forecast the director set for that month.        */
-const SEED_TARGETS = {
-  '2026-02':  70000, '2026-03': 130000, '2026-04': 100000, '2026-05':  80000,
-  '2026-06':  60000, '2026-07': 120000, '2026-08': 140000, '2026-09': 300000,
+/* ---- SEED locked monthly forecast (Accuracy module) ----------------------
+   key 'YYYY-MM' -> { amount: committed forecast frozen that month, at: date }.
+   The current month (Jul) is intentionally left UNLOCKED to demo locking.     */
+const SEED_LOCKS = {
+  '2026-02': { amount:  70000, at: '2026-03-01' },
+  '2026-03': { amount: 130000, at: '2026-04-01' },
+  '2026-04': { amount: 100000, at: '2026-05-01' },
+  '2026-05': { amount:  80000, at: '2026-06-01' },
+  '2026-06': { amount:  60000, at: '2026-07-01' },
 };

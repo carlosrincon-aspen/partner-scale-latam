@@ -56,9 +56,10 @@ const WIN = {
 const inWin = (deal, w) => { const t = dateOf(deal.close); return t >= w.from && t <= w.to; };
 
 /* ---- Store (localStorage) ------------------------------------------------- */
-const STORE_KEY = 'psl:data:v3';   // v3: partners profile/contacts, config, targets
-const BK_KEY    = 'psl:backups:v3';
-let STORE = { partners: [], deals: [], config: {}, targets: {}, actuals: {} };
+const STORE_KEY = 'psl:data:v4';   // v4: deal.actual + locked monthly forecast (locks)
+const BK_KEY    = 'psl:backups:v4';
+let STORE = { partners: [], deals: [], config: {}, locks: {} };
+const CUR_KEY = Y0 + '-' + String(TODAY.getMonth() + 1).padStart(2, '0');   // current month key
 let partnerById = {}, dealsByPartner = {}, countryByCode = {}, territoryByCode = {};
 
 COUNTRIES.forEach(c => countryByCode[c.code] = c);
@@ -74,14 +75,14 @@ function loadStore() {
 function normalize(s) {                         // fill any missing top-level pieces
   s.partners = s.partners || []; s.deals = s.deals || [];
   s.config = Object.assign(clone(SEED_CONFIG), s.config || {});
-  s.targets = s.targets || {}; s.actuals = s.actuals || {};
+  s.locks = s.locks || {};
   s.partners.forEach(p => { p.contacts = p.contacts || []; });
   return s;
 }
 function seedStore() {
   STORE = normalize({
     partners: clone(SEED_PARTNERS), deals: clone(SEED_DEALS),
-    config: clone(SEED_CONFIG), targets: clone(SEED_TARGETS), actuals: {},
+    config: clone(SEED_CONFIG), locks: clone(SEED_LOCKS),
   });
   saveStore('seed');
 }
@@ -137,6 +138,38 @@ function agg(deals) {
   return m;
 }
 const winDeals = (deals, w) => deals.filter(d => inWin(d, w));
+
+/* ---- Actual / forecast / lock helpers ------------------------------------ */
+const dealActual = (d) => (d.actual != null && d.actual !== '') ? Number(d.actual) : d.amount;
+/* live committed forecast (Proposal+Won) for a month, from the deals */
+function committedForMonth(key) {
+  return STORE.deals.filter(d => STAGE_MAP[d.stage].committed && monthKey(d.close) === key)
+                    .reduce((s, d) => s + d.amount, 0);
+}
+/* what actually closed (Won) that month, using the real closed amount */
+function actualForMonth(key) {
+  return STORE.deals.filter(d => STAGE_MAP[d.stage].won && monthKey(d.close) === key)
+                    .reduce((s, d) => s + dealActual(d), 0);
+}
+/* the forecast used for accuracy: locked value if locked, else live committed */
+const monthForecast = (key) => STORE.locks[key] ? STORE.locks[key].amount : committedForMonth(key);
+function lockMonth(key) {
+  STORE.locks[key] = { amount: committedForMonth(key), at: new Date().toISOString().slice(0, 10) };
+  saveStore('lock'); route();
+}
+function unlockMonth(key) {
+  if (!confirm('Unlock ' + fmtMonth(key) + '? The forecast will follow your deals again until you re-lock.')) return;
+  delete STORE.locks[key]; saveStore('unlock'); route();
+}
+/* partner (or any set of) forecast accuracy = Won actual ÷ decided (Won+Lost) value */
+function accuracyOf(deals) {
+  let forecast = 0, actual = 0;
+  deals.forEach(d => { const s = STAGE_MAP[d.stage];
+    if (s.won)  { forecast += d.amount; actual += dealActual(d); }
+    if (s.lost && d.stage === 'Lost') forecast += d.amount;   // Declined = disqualified, excluded
+  });
+  return { forecast, actual, acc: forecast > 0 ? actual / forecast : null };
+}
 
 /* ---- Small UI components -------------------------------------------------- */
 const initials = (name) => name.replace(/[^A-Za-z0-9 ]/g, '').split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
@@ -281,16 +314,16 @@ function partnerTable(parts) {
   return `<div class="card"><div class="table-wrap"><table>
     <thead><tr><th>Partner</th><th>Country</th><th>Tier</th>
       <th class="num">Committed ${WIN.q.short}</th><th class="num">Committed rest ${Y0}</th>
-      <th class="num">Weighted ${WIN.q.short}</th><th class="num"># deals</th><th></th></tr></thead>
+      <th class="num">Accuracy</th><th class="num"># deals</th><th></th></tr></thead>
     <tbody>${parts.map(p => {
-      const d = partnerDeals(p.id), q = agg(winDeals(d, WIN.q)), r = agg(winDeals(d, WIN.rest));
+      const d = partnerDeals(p.id), q = agg(winDeals(d, WIN.q)), r = agg(winDeals(d, WIN.rest)), pa = accuracyOf(d);
       return `<tr class="row-link" onclick="go('#/partner/${p.id}')">
         <td><div class="cell-partner"><span class="avatar sm">${initials(p.name)}</span> <b>${esc(p.name)}</b></div></td>
         <td>${(p.country||{}).flag||''} ${(p.country||{}).name||''}</td>
         <td><span class="badge tier">${esc(p.tier)}</span></td>
         <td class="num"><b>${fmtUSD(q.committedAmt)}</b></td>
         <td class="num">${fmtUSD(r.committedAmt)}</td>
-        <td class="num">${fmtUSD(q.weighted)}</td>
+        <td class="num">${pa.acc == null ? '<span class="muted-sm">—</span>' : `<span class="acc ${pa.acc >= 0.95 ? 'good' : pa.acc >= 0.8 ? 'mid' : 'low'}">${Math.round(pa.acc * 100)}%</span>`}</td>
         <td class="num">${d.length}</td><td class="num">›</td></tr>`;
     }).join('')}</tbody></table></div></div>`;
 }
@@ -321,6 +354,7 @@ function renderPartner(id) {
   const t = territoryByCode[p.country.territory];
   const deals = partnerDeals(id);
   const q = agg(winDeals(deals, WIN.q)), r = agg(winDeals(deals, WIN.rest)), n = agg(winDeals(deals, WIN.next)), m = agg(deals);
+  const pa = accuracyOf(deals);
   const row = (label, val) => val ? `<div class="dl-row"><span class="dl-k">${label}</span><span class="dl-v">${esc(val)}</span></div>` : '';
 
   app().innerHTML = `
@@ -340,7 +374,7 @@ function renderPartner(id) {
       ${kpi({ label: 'Committed · ' + WIN.q.label, value: fmtUSDshort(q.committedAmt), foot: q.committedCount + ' deals · 3 months', primary: true })}
       ${kpi({ label: 'Committed · ' + WIN.rest.label, value: fmtUSDshort(r.committedAmt), foot: r.committedCount + ' deals · rest of year' })}
       ${kpi({ label: 'Committed · ' + WIN.next.label, value: fmtUSDshort(n.committedAmt), foot: n.committedCount + ' deals' })}
-      ${kpi({ label: 'Weighted · ' + WIN.q.short, value: fmtUSDshort(q.weighted), foot: 'probability-adjusted' })}
+      ${kpi({ label: 'Forecast accuracy', value: pa.acc == null ? '—' : Math.round(pa.acc * 100) + '%', foot: 'Won ' + fmtUSDshort(pa.actual) + ' ÷ decided ' + fmtUSDshort(pa.forecast) })}
       ${kpi({ label: 'Won (year)', value: fmtUSDshort(m.wonAmt), foot: '' })}
       ${kpi({ label: 'Open pipeline', value: fmtUSDshort(m.pipelineAmt), foot: m.openCount + ' deals' })}
     </div>
@@ -377,9 +411,10 @@ function renderPartner(id) {
 
     <div class="section-head" style="margin-top:6px">
       <h2>Deals · ${esc(p.name)}</h2>
-      <button class="btn ghost sm" onclick="go('#/forecast')">✎ Manage in Forecast</button>
+      <button class="btn primary sm" onclick="openDealForm(null,'${p.id}')">＋ New deal</button>
     </div>
-    ${dealsTable(deals, { showPartner: false })}`;
+    <p class="page-sub" style="margin:-8px 0 12px">Click ✎ on a deal to record its real outcome (Won / Lost / Declined + closed amount).</p>
+    ${dealsTable(deals, { showPartner: false, editable: true })}`;
   wireDealsTable();
 }
 
@@ -388,36 +423,40 @@ function renderPartner(id) {
 ============================================================================= */
 let dealSort = { key: 'close', dir: 1 };
 function dealsTable(deals, opts) {
-  const showPartner = opts && opts.showPartner;
+  opts = opts || {};
+  const showPartner = opts.showPartner, editable = opts.editable;
   if (!deals.length) return '<div class="card"><div class="empty">No deals. Add them in <b>Forecast</b>.</div></div>';
   const cols = [ showPartner ? { key: 'partner', label: 'Partner' } : null,
     { key: 'name', label: 'Deal' }, { key: 'product', label: 'Product' },
-    { key: 'created', label: 'Created' }, { key: 'close', label: 'Close date' },
-    { key: 'amount', label: 'Amount USD', num: true }, { key: 'weighted', label: 'Weighted', num: true },
-    { key: 'stage', label: 'Stage' } ].filter(Boolean);
+    { key: 'close', label: 'Close date' }, { key: 'amount', label: 'Forecast USD', num: true },
+    { key: 'stage', label: 'Stage' }, { key: 'actual', label: 'Actual (real)', num: true } ].filter(Boolean);
   const rows = deals.slice().sort((a, b) => {
     let av, bv;
     if (dealSort.key === 'partner') { av = (partnerById[a.partnerId]||{}).name || ''; bv = (partnerById[b.partnerId]||{}).name || ''; }
-    else if (dealSort.key === 'weighted') { av = a.amount * STAGE_MAP[a.stage].weight; bv = b.amount * STAGE_MAP[b.stage].weight; }
+    else if (dealSort.key === 'actual') { av = STAGE_MAP[a.stage].won ? dealActual(a) : -1; bv = STAGE_MAP[b.stage].won ? dealActual(b) : -1; }
     else { av = a[dealSort.key]; bv = b[dealSort.key]; }
     if (typeof av === 'string') { av = av.toLowerCase(); bv = bv.toLowerCase(); }
     return (av < bv ? -1 : av > bv ? 1 : 0) * dealSort.dir;
   });
   const overdue = (d) => !STAGE_MAP[d.stage].won && !STAGE_MAP[d.stage].lost && dateOf(d.close) < TODAY;
+  const actualCell = (d) => { const s = STAGE_MAP[d.stage];
+    if (s.won) return `<b class="ok">${fmtUSD(dealActual(d))}</b>`;
+    if (s.lost) return '<span class="muted-sm">$0</span>';
+    return '<span class="muted-sm">pending</span>'; };
   return `<div class="card"><div class="table-wrap"><table id="dealsT">
-    <thead><tr>${cols.map(c => `<th class="${c.num ? 'num' : ''}" data-k="${c.key}">${c.label} ${dealSort.key === c.key ? `<span class="arrow">${dealSort.dir > 0 ? '▲' : '▼'}</span>` : ''}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map(d => { const s = STAGE_MAP[d.stage];
-      return `<tr>
+    <thead><tr>${cols.map(c => `<th class="${c.num ? 'num' : ''}" data-k="${c.key}">${c.label} ${dealSort.key === c.key ? `<span class="arrow">${dealSort.dir > 0 ? '▲' : '▼'}</span>` : ''}</th>`).join('')}${editable ? '<th class="num">Edit</th>' : ''}</tr></thead>
+    <tbody>${rows.map(d => `<tr>
         ${showPartner ? `<td><div class="cell-partner"><span class="avatar sm">${initials((partnerById[d.partnerId]||{}).name||'?')}</span> <a class="lnk" onclick="go('#/partner/${d.partnerId}')">${esc((partnerById[d.partnerId]||{}).name||'—')}</a></div></td>` : ''}
         <td class="deal-name">${esc(d.name)}${overdue(d) ? ' <span class="badge st-Lost" title="Past close date">overdue</span>' : ''}</td>
-        <td>${esc(d.product)}</td><td>${fmtDate(d.created)}</td><td>${fmtDate(d.close)}</td>
-        <td class="num"><b>${fmtUSD(d.amount)}</b></td><td class="num">${s.lost ? '—' : fmtUSD(d.amount * s.weight)}</td>
-        <td>${stageBadge(d.stage)}</td></tr>`;
-    }).join('')}</tbody></table></div></div>`;
+        <td>${esc(d.product)}</td><td>${fmtDate(d.close)}</td>
+        <td class="num"><b>${fmtUSD(d.amount)}</b></td>
+        <td>${stageBadge(d.stage)}</td>
+        <td class="num">${actualCell(d)}</td>
+        ${editable ? `<td class="num nowrap"><button class="icon-btn" title="Record outcome / edit" onclick="openDealForm('${d.id}')">✎</button></td>` : ''}</tr>`).join('')}</tbody></table></div></div>`;
 }
 function wireDealsTable() {
   const t = document.getElementById('dealsT'); if (!t) return;
-  t.querySelectorAll('thead th').forEach(th => th.onclick = () => {
+  t.querySelectorAll('thead th[data-k]').forEach(th => th.onclick = () => {
     const k = th.dataset.k;
     if (dealSort.key === k) dealSort.dir *= -1; else { dealSort.key = k; dealSort.dir = 1; }
     route();
@@ -439,6 +478,7 @@ function renderForecast() {
       ${kpi({ label: 'Total committed', value: fmtUSDshort(m.committedAmt), foot: m.committedCount + ' deals', primary: true })}
       ${kpi({ label: 'Won (year)', value: fmtUSDshort(m.wonAmt), foot: '' })}
     </div>
+    ${lockPanel()}
     <div class="toolbar"><button class="btn primary" onclick="openDealForm()">＋ New deal</button></div>
     <div class="card"><div class="table-wrap"><table>
       <thead><tr><th>Partner</th><th>Deal</th><th>Product</th><th>Close date</th>
@@ -455,21 +495,31 @@ function renderForecast() {
 }
 
 /* =============================================================================
-   ACCURACY (forecast vs actual, by month)
+   ACCURACY (locked forecast vs actual, by month)
 ============================================================================= */
-function actualForMonth(key) {
-  if (STORE.actuals[key] != null) return STORE.actuals[key];
-  return STORE.deals.filter(d => STAGE_MAP[d.stage].won && monthKey(d.close) === key).reduce((s, d) => s + d.amount, 0);
+function lockPanel() {
+  const live = committedForMonth(CUR_KEY), lk = STORE.locks[CUR_KEY];
+  if (lk) {
+    const drift = live - lk.amount;
+    return `<div class="lock-panel locked">
+      <div><div class="lp-title">🔒 ${fmtMonth(CUR_KEY)} forecast locked</div>
+        <div class="lp-sub">${fmtUSD(lk.amount)} committed · locked ${lk.at} · sent to Accuracy${drift ? ` · deals now sum ${fmtUSD(live)} (${drift > 0 ? '+' : ''}${fmtUSD(drift)})` : ''}</div></div>
+      <button class="btn ghost sm" onclick="unlockMonth('${CUR_KEY}')">Unlock</button></div>`;
+  }
+  return `<div class="lock-panel">
+    <div><div class="lp-title">${fmtMonth(CUR_KEY)} forecast: <b>${fmtUSD(live)}</b> committed</div>
+      <div class="lp-sub">Lock it to freeze this month's number into Accuracy for end-of-month comparison.</div></div>
+    <button class="btn primary sm" onclick="lockMonth('${CUR_KEY}')">🔒 Lock month → Accuracy</button></div>`;
 }
 function renderAccuracy() {
   renderTabs('accuracy');
   const rows = [];
   for (let mo = 0; mo < 12; mo++) {
     const key = Y0 + '-' + String(mo + 1).padStart(2, '0');
-    const forecast = STORE.targets[key] || 0;
-    const actual = actualForMonth(key);
+    const forecast = monthForecast(key), actual = actualForMonth(key);
+    const locked = !!STORE.locks[key];
     const isPast = new Date(Y0, mo + 1, 0) <= TODAY;
-    rows.push({ key, mo, forecast, actual, isPast, acc: forecast > 0 ? actual / forecast : null });
+    rows.push({ key, mo, forecast, actual, locked, isPast, acc: forecast > 0 ? actual / forecast : null });
   }
   const past = rows.filter(r => r.isPast && r.forecast > 0);
   const totF = past.reduce((s, r) => s + r.forecast, 0), totA = past.reduce((s, r) => s + r.actual, 0);
@@ -477,9 +527,10 @@ function renderAccuracy() {
 
   app().innerHTML = `
     <h1 class="page-title">Forecast accuracy <span class="tag-demo">${Y0}</span></h1>
-    <p class="page-sub">Committed forecast vs. actual closed (Won) by month. Enter your monthly target; actual comes from Won deals (editable).</p>
+    <p class="page-sub">Locked forecast (from your committed deals) vs. actual closed (Won) by month.
+      Lock a month in <b>Forecast</b>; record real outcomes on each deal (Won + closed amount) and they flow here.</p>
     <div class="kpi-row">
-      ${kpi({ label: 'Overall accuracy · YTD', value: overall == null ? '—' : Math.round(overall * 100) + '%', foot: 'actual ÷ forecast (closed months)', primary: true })}
+      ${kpi({ label: 'Overall accuracy · YTD', value: overall == null ? '—' : Math.round(overall * 100) + '%', foot: 'actual ÷ locked forecast', primary: true })}
       ${kpi({ label: 'Forecast · YTD', value: fmtUSDshort(totF), foot: past.length + ' closed months' })}
       ${kpi({ label: 'Actual · YTD', value: fmtUSDshort(totA), foot: 'Won to date' })}
     </div>
@@ -488,18 +539,19 @@ function renderAccuracy() {
       ${accuracyChart(rows)}</div>
     <div class="section-head" style="margin-top:22px"><h2>Monthly detail</h2></div>
     <div class="card"><div class="table-wrap"><table>
-      <thead><tr><th>Month</th><th class="num">Forecast (target)</th><th class="num">Actual (Won)</th>
+      <thead><tr><th>Month</th><th class="num">Forecast</th><th>Status</th><th class="num">Actual (Won)</th>
         <th class="num">Accuracy</th><th class="num">Variance</th></tr></thead>
       <tbody>${rows.map(r => `<tr${r.mo === TODAY.getMonth() ? ' class="hl"' : ''}>
         <td><b>${fmtMonth(r.key)}</b></td>
-        <td class="num"><input class="mini-in" type="number" min="0" step="1000" value="${r.forecast || ''}" placeholder="0"
-              onchange="setTarget('${r.key}', this.value)"></td>
-        <td class="num"><input class="mini-in" type="number" min="0" step="1000" value="${STORE.actuals[r.key] != null ? STORE.actuals[r.key] : ''}"
-              placeholder="${r.actual}" title="Auto from Won: ${fmtUSD(r.actual)} — type to override" onchange="setActual('${r.key}', this.value)"></td>
+        <td class="num">${r.forecast ? fmtUSD(r.forecast) : '—'}</td>
+        <td>${r.locked
+              ? `<span class="lock-tag">🔒 locked</span> <button class="icon-btn" title="Unlock" onclick="unlockMonth('${r.key}')">✎</button>`
+              : (r.forecast ? `<button class="btn ghost sm" onclick="lockMonth('${r.key}')">Lock</button>` : '<span class="muted-sm">—</span>')}</td>
+        <td class="num">${fmtUSD(r.actual)}</td>
         <td class="num">${r.acc == null ? '—' : `<span class="acc ${r.acc >= 0.95 ? 'good' : r.acc >= 0.8 ? 'mid' : 'low'}">${Math.round(r.acc * 100)}%</span>`}</td>
         <td class="num">${r.forecast ? fmtUSD(r.actual - r.forecast) : '—'}</td></tr>`).join('')}
       </tbody></table></div></div>
-    <p class="footer-note">“Actual” defaults to Won deals closing that month; type a value to override it.</p>`;
+    <p class="footer-note">Forecast = locked committed deals (or live until you lock). Actual = Won deals' real closed amount that month.</p>`;
 }
 function accuracyChart(rows) {
   const max = Math.max(1, ...rows.flatMap(r => [r.forecast, r.actual]));
@@ -516,8 +568,6 @@ function accuracyChart(rows) {
   }).join('');
   return `<div class="chart-wrap"><svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img">${bars}</svg></div>`;
 }
-function setTarget(key, val) { const n = parseFloat(val); if (n > 0) STORE.targets[key] = n; else delete STORE.targets[key]; saveStore('target'); renderAccuracy(); }
-function setActual(key, val) { const n = parseFloat(val); if (val === '' || isNaN(n)) delete STORE.actuals[key]; else STORE.actuals[key] = n; saveStore('actual'); renderAccuracy(); }
 
 /* =============================================================================
    ADMIN (catalogs + backups + danger zone)
@@ -623,27 +673,31 @@ function selectHTML(id, options, selected) {
     return `<option value="${esc(v)}"${v === selected ? ' selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`;
 }
 
-function openDealForm(id) {
+function openDealForm(id, prefillPartner) {
   const d = id ? STORE.deals.find(x => x.id === id) : null;
   if (!STORE.partners.length) { alert('Create a partner first (Partners tab).'); return; }
   const pOpts = STORE.partners.map(p => ({ v: p.id, l: p.name + ' · ' + ((countryByCode[p.countryCode]||{}).name||'') }));
   const body = `
-    ${field('Partner', selectHTML('f_partner', pOpts, d ? d.partnerId : STORE.partners[0].id))}
+    ${field('Partner', selectHTML('f_partner', pOpts, d ? d.partnerId : (prefillPartner || STORE.partners[0].id)))}
     ${field('Deal name', `<input id="f_name" type="text" value="${d ? esc(d.name) : ''}" placeholder="e.g. Sales Cloud rollout">`)}
     ${field('Product', selectHTML('f_product', STORE.config.products, d ? d.product : STORE.config.products[0]))}
-    <div class="fld-row">${field('Amount USD', `<input id="f_amount" type="number" min="0" step="1000" value="${d ? d.amount : ''}" placeholder="0">`)}
+    <div class="fld-row">${field('Forecast amount USD', `<input id="f_amount" type="number" min="0" step="1000" value="${d ? d.amount : ''}" placeholder="0">`)}
       ${field('Close date', `<input id="f_close" type="date" value="${d ? d.close : ''}">`)}</div>
     <div class="fld-row">${field('Stage', selectHTML('f_stage', STAGES.map(s => ({ v: s.key, l: s.label + ' (' + Math.round(s.weight*100) + '%)' })), d ? d.stage : 'Discovery'))}
-      ${field('Created date', `<input id="f_created" type="date" value="${d ? d.created : TODAY.toISOString().slice(0,10)}">`)}</div>`;
+      ${field('Created date', `<input id="f_created" type="date" value="${d ? d.created : TODAY.toISOString().slice(0,10)}">`)}</div>
+    <div class="fld-hint">Set the stage to <b>Won</b> when it closes, then enter the real amount below (or <b>Lost / Declined</b> if it didn't).</div>
+    ${field('Actual closed USD (only if Won)', `<input id="f_actual" type="number" min="0" step="1000" value="${d && d.actual != null && d.actual !== '' ? d.actual : ''}" placeholder="defaults to forecast amount">`)}`;
   overlay(id ? 'Edit deal' : 'New deal', body, () => {
     const name = val('f_name'), amount = parseFloat(val('f_amount')), close = val('f_close');
     if (!name) return alert('Enter the deal name.');
     if (!(amount >= 0)) return alert('Enter a valid amount.');
     if (!close) return alert('Choose the close date.');
+    const actualStr = val('f_actual');
     const rec = { partnerId: val('f_partner'), name, product: val('f_product'), amount, close,
-                  created: val('f_created') || close, stage: val('f_stage') };
+                  created: val('f_created') || close, stage: val('f_stage'),
+                  actual: actualStr === '' ? '' : parseFloat(actualStr) };
     if (d) Object.assign(d, rec); else STORE.deals.push(Object.assign({ id: 'd' + Date.now() }, rec));
-    saveStore('deal'); closeOverlay(); renderForecast();
+    saveStore('deal'); closeOverlay(); route();
   });
 }
 
@@ -701,7 +755,7 @@ function deleteContact(partnerId, contactId) {
 function deleteDeal(id) {
   const d = STORE.deals.find(x => x.id === id); if (!d) return;
   if (!confirm('Delete deal “' + d.name + '”?')) return;
-  STORE.deals = STORE.deals.filter(x => x.id !== id); saveStore('deal'); renderForecast();
+  STORE.deals = STORE.deals.filter(x => x.id !== id); saveStore('deal'); route();
 }
 function resetSample() {
   if (!confirm('This replaces ALL your data with the sample. A snapshot is saved first. Continue?')) return;

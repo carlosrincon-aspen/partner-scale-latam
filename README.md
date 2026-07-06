@@ -16,12 +16,16 @@ y alimenta todo lo demás (Overview, territorios, países, partners).
   y del próximo año. Clic en **$ comprometido** → lista de esos negocios. Debajo,
   tarjetas de **territorios** (BRA · MEX · NOLA · SOLA) → país → partner.
 - **Partners** — todos los partners **por territorio** (pocos clics). Abrir un partner =
-  vista detallada: KPIs de forecast, **hoja de vida** (tier, tipo, antigüedad, owner,
-  industria, sede, web, salud, notas), **contactos** (nombre, cargo, correo, teléfono) y
-  sus negocios. **Los partners se crean/editan aquí** (aquí, no en Forecast).
-- **Forecast** — captura manual de **negocios** (deals): crear/editar/borrar.
-- **Accuracy** — forecast vs. real (Won) por mes: gráfico Forecast/Actual, tabla editable
-  de target mensual y % de acierto (YTD y por mes).
+  vista detallada: KPIs de forecast + **% de accuracy del partner**, **hoja de vida**
+  (tier, tipo, antigüedad, owner, industria, sede, web, salud, notas), **contactos**
+  (nombre, cargo, correo, teléfono) y sus negocios. **Los partners se crean/editan aquí.**
+  Aquí también se **registra el resultado real por deal** (Won / Lost / Declined + monto
+  real cerrado) con ✎.
+- **Forecast** — captura manual de **negocios** (deals) + botón **Lock month**: congela el
+  forecast comprometido del mes actual y lo envía a Accuracy.
+- **Accuracy** — **forecast bloqueado** (derivado de los deals comprometidos) vs. **real**
+  (Won, con monto real por deal) por mes: gráfico Forecast/Actual, lock por mes y % de
+  acierto (YTD y mensual). Nada se escribe a mano aquí: todo migra de Forecast y de los deals.
 - **Admin** — editar catálogos (**tiers**, health, productos, tipos; renombrar tier
   actualiza a todos los partners), **backups** (snapshots automáticos + Export/Import JSON
   + restaurar) y zona de reinicio.
@@ -60,8 +64,17 @@ Publicar: subir a **GitHub Pages** (rama `main`, raíz). Incluir un `.nojekyll` 
 Todo se guarda en **localStorage** de ESE navegador, con **snapshots automáticos**
 (últimos 40) en cada cambio, restaurables desde **Admin › Backups**. Para respaldo
 permanente/off-device usa **Exportar JSON** (Admin) y guárdalo; **Importar JSON** lo
-restaura en cualquier equipo. Storage key = `psl:data:v3`. (Para multiusuario en la nube
+restaura en cualquier equipo. Storage key = `psl:data:v4`. (Para multiusuario en la nube
 haría falta un backend — pendiente).
+
+## Flujo de accuracy
+
+1. Captura tus deals en **Forecast** (stage Discovery→Proposal). El comprometido = Proposal+Won.
+2. Al terminar el mes de forecast, pulsa **Lock month** → congela el número del mes en Accuracy.
+3. Durante/al cierre del mes, en **Partners → deal (✎)** marca el resultado real (Won + monto
+   cerrado, o Lost/Declined).
+4. **Accuracy** compara lo real (Won) contra el forecast **bloqueado** → % de acierto por mes,
+   YTD y por partner.
 
 ## Estructura
 
