@@ -1,0 +1,80 @@
+# Partner Scale LATAM
+
+WebApp de seguimiento de **partners y forecast** para un Partner Scale Director
+en Salesforce LATAM. Marca Salesforce (nube + paleta azul), barra oscura + pestañas + tarjetas KPI.
+
+**La pestaña Forecast es la fuente de datos:** el forecast se captura manualmente ahí
+y alimenta todo lo demás (Overview, territorios, países, partners).
+
+> ⚠️ Los datos que trae por defecto son **ficticios** ("Partner 1, 2, 3…") solo para
+> demostrar el flujo. Se reemplazan capturando el forecast real en la pestaña Forecast.
+
+## Pestañas
+
+- **Overview** — KPIs del **trimestre calendario actual**: comprometido en $, # de
+  negocios y # de partners que entran al forecast, más comprometido de resto de año
+  y del próximo año. Clic en **$ comprometido** → lista de esos negocios. Debajo,
+  tarjetas de **territorios** (BRA · MEX · NOLA · SOLA) → país → partner.
+- **Partners** — todos los partners **por territorio** (pocos clics). Abrir un partner =
+  vista detallada: KPIs de forecast, **hoja de vida** (tier, tipo, antigüedad, owner,
+  industria, sede, web, salud, notas), **contactos** (nombre, cargo, correo, teléfono) y
+  sus negocios. **Los partners se crean/editan aquí** (aquí, no en Forecast).
+- **Forecast** — captura manual de **negocios** (deals): crear/editar/borrar.
+- **Accuracy** — forecast vs. real (Won) por mes: gráfico Forecast/Actual, tabla editable
+  de target mensual y % de acierto (YTD y por mes).
+- **Admin** — editar catálogos (**tiers**, health, productos, tipos; renombrar tier
+  actualiza a todos los partners), **backups** (snapshots automáticos + Export/Import JSON
+  + restaurar) y zona de reinicio.
+
+## Modelo comercial (territorios Salesforce LATAM)
+
+| Territorio | Países |
+|---|---|
+| **BRA** Brasil | Brasil |
+| **MEX** México | México |
+| **NOLA** Norteamérica & Caribe | Costa Rica, Panamá, Guatemala, Rep. Dominicana |
+| **SOLA** Sudamérica (Cono Sur + Andina) | Colombia, Chile, Argentina, Perú |
+
+## Deal stages (probabilidad de cierre)
+
+`Discovery` (20%) · `Demo - POC` (40%) · `Proposal` (70%) · `Won` (100%) · `Lost` (0%) · `Declined` (0%).
+**Committed** en los KPIs = `Proposal` + `Won`. **Weighted** = Σ monto × probabilidad.
+
+> La UI de la herramienta está en **inglés**; este README (notas de dev) queda en español.
+
+## Cómo correrla
+
+Sitio estático sin build. Opciones:
+
+1. **Doble clic** en `index.html`.
+2. **Servidor local** (recomendado, hay Node):
+   ```
+   npx http-server -p 8090 -c-1
+   ```
+   y abrir <http://localhost:8090>.
+
+Publicar: subir a **GitHub Pages** (rama `main`, raíz). Incluir un `.nojekyll` vacío.
+
+## Persistencia
+
+Todo se guarda en **localStorage** de ESE navegador, con **snapshots automáticos**
+(últimos 40) en cada cambio, restaurables desde **Admin › Backups**. Para respaldo
+permanente/off-device usa **Exportar JSON** (Admin) y guárdalo; **Importar JSON** lo
+restaura en cualquier equipo. Storage key = `psl:data:v3`. (Para multiusuario en la nube
+haría falta un backend — pendiente).
+
+## Estructura
+
+```
+index.html      Barra superior + pestañas
+css/styles.css  Estilos
+js/data.js      Catálogos (territorios, países) + datos SEMILLA ficticios
+js/app.js       Store (localStorage), cálculos de forecast, vistas y módulo Forecast
+```
+
+## Próximos pasos sugeridos
+
+- Cuotas por territorio/partner → % de attainment.
+- Backend/nube para multiusuario (Firebase, Google Sheets, etc.).
+- Conexión a Salesforce (API o CSV) para reemplazar la captura manual.
+- Vista de evolución de pipeline por trimestre.
